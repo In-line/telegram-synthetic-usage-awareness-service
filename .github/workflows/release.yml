@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-packages:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - debian-13
+          - ubuntu-2404
+          - ubuntu-2604
+          - fedora-43
+          - fedora-44
+          - rhel-8
+          - rhel-9
+          - opensuse-tumbleweed
+          - arch
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Build ${{ matrix.image }} package with pkger in Docker
+        run: |
+          ./scripts/install-pkger.sh
+          # pkger does not create its log/output dirs on a fresh clone.
+          mkdir -p dist .pkger-logs
+          # Pre-tag the custom image so pkger's `FROM <name>:latest` step
+          # never races (pkger 0.11.0 quirk, see scripts/build-all-packages.sh).
+          docker build -q -t ${{ matrix.image }}:latest images/${{ matrix.image }} >/dev/null
+          ./bin/pkger -c .pkger.yml build -i ${{ matrix.image }} -- synthetic-usage-awareness
+
+      - name: Smoke-test deb in clean Debian 13
+        if: matrix.image == 'debian-13'
+        run: |
+          DEB=$(find dist/debian-13 -name '*.deb' | head -n1)
+          test -n "$DEB"
+          docker run --rm -v "$PWD:/repo":ro debian:13 /bin/sh -exc '
+            apt-get update -qq
+            apt-get install -y /repo/"'"$DEB"'"
+            synthetic-usage-awareness --version
+          '
+
+      - name: Smoke-test rpm in clean Fedora 43
+        if: matrix.image == 'fedora-43'
+        run: |
+          # Binary rpm only — the .src.rpm matches '*.rpm' first alphabetically.
+          RPM=$(find dist/fedora-43 -name '*.x86_64.rpm' | head -n1)
+          test -n "$RPM"
+          docker run --rm -v "$PWD:/repo":ro fedora:43 /bin/sh -exc '
+            dnf install -y /repo/"'"$RPM"'"
+            synthetic-usage-awareness --version
+          '
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: packages-${{ matrix.image }}
+          path: dist/${{ matrix.image }}/
+          if-no-files-found: error
+
+  release:
+    needs: [build-packages]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Download all package artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+          # NO merge-multiple: packages from different distros share identical
+          # filenames (e.g. synthetic-usage-awareness-1.0.0-1.amd64.deb from
+          # debian-13 AND ubuntu-*) — merging would silently overwrite all
+          # but the last. Keep the per-job (per-distro) subdirectories.
+
+      - name: Rename packages with distro prefix
+        run: |
+          # Disambiguate identical filenames across distros by inserting the
+          # distro name before the package extension:
+          #   synthetic-usage-awareness-1.0.0-1.amd64.deb
+          #     → synthetic-usage-awareness-1.0.0-1.debian-13.amd64.deb
+          #   synthetic-usage-awareness-1.0.0-1-x86_64.pkg.tar.zst
+          #     → synthetic-usage-awareness-1.0.0-1-x86_64.arch.pkg.tar.zst
+          for dir in artifacts/packages-*; do
+              distro="${dir#artifacts/packages-}"
+              for f in "$dir"/*.deb "$dir"/*.rpm "$dir"/*.pkg.tar.zst; do
+                  [ -e "$f" ] || continue
+                  base="$(basename "$f")"
+                  case "$base" in
+                      *.pkg.tar.zst) new="${base%.pkg.tar.zst}.${distro}.pkg.tar.zst" ;;
+                      *.deb)         new="${base%.deb}.${distro}.deb" ;;
+                      *.rpm)         new="${base%.rpm}.${distro}.rpm" ;;
+                      *)             new="$base" ;;
+                  esac
+                  mv "$f" "$dir/$new"
+              done
+          done
+          find artifacts -type f | sort
+
+      - name: Write release notes with SHA256 checksums
+        run: |
+          # Curated notes are optional. If none exist for this tag, start with
+          # a minimal body; then append a checksum block for every artifact so
+          # users can verify downloads independently of GitHub.
+          NOTES=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ ! -s "$NOTES" ]; then
+            echo "Release $GITHUB_REF_NAME" > "$NOTES"
+          fi
+          {
+            echo ""
+            echo "## SHA256 checksums"
+            echo ""
+            echo '```'
+            find artifacts -type f ! -name '*.sha256' -print0 \
+              | sort -z \
+              | xargs -0 sha256sum
+            echo '```'
+          } >> "$NOTES"
+
+      - name: Remove stale assets from existing release
+        run: |
+          # Re-running the tag leaves the previous run's assets attached
+          # (action-gh-release only overwrites same-named files, and the old
+          # flat names differ from the per-distro names). Drop all existing
+          # assets so the release lists exactly the current build. Auto-
+          # generated source archives are not API assets and are untouched.
+          RELEASE_JSON=$(curl -sf \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.ref_name }}" \
+            || echo "{}")
+          ASSET_IDS=$(echo "$RELEASE_JSON" | jq -r '.assets[]?.id // empty')
+          for id in $ASSET_IDS; do
+            curl -sf -X DELETE \
+              -H "Authorization: Bearer ${{ github.token }}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/$id"
+            echo "deleted stale asset $id"
+          done
+
+      - name: Create GitHub Release with packages
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          body_path: .github/release-notes/${{ github.ref_name }}.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          generate_release_notes: false
+          files: |
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.pkg.tar.zst
+            artifacts/**/*.tar.gz

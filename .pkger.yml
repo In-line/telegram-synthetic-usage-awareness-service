@@ -1,0 +1,41 @@
+# pkger configuration — https://github.com/vv9k/pkger
+# Build all targets:  pkger -c .pkger.yml build --all
+# Build Debian 13:    pkger -c .pkger.yml build -i debian-13 -- synthetic-usage-awareness
+recipes_dir: recipes
+images_dir: images
+output_dir: dist
+log_dir: .pkger-logs
+
+images:
+  # --- Debian family (deb) ---
+  - name: debian-13
+    target: deb
+    os: Debian
+  - name: ubuntu-2404
+    target: deb
+    os: Ubuntu
+  - name: ubuntu-2604
+    target: deb
+    os: Ubuntu
+  # --- Fedora / RHEL family (rpm) ---
+  - name: fedora-43
+    target: rpm
+  - name: fedora-44
+    target: rpm
+    os: Fedora
+  - name: rhel-8
+    target: rpm
+    os: Red Hat
+  - name: rhel-9
+    target: rpm
+    os: Red Hat
+  # --- SUSE (rpm) ---
+  # pkger 0.11.0 has no OpenSUSE distro entry, so we declare Fedora (dnf) for
+  # dependency installation; see images/opensuse-tumbleweed/Dockerfile.
+  - name: opensuse-tumbleweed
+    target: rpm
+    os: Fedora
+  # --- Arch (pkg) ---
+  - name: arch
+    target: pkg
+    os: Arch Linux

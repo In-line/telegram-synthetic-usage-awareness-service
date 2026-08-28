@@ -1,0 +1,32 @@
+#!/bin/sh
+# synthetic-usage-awareness CLI launcher (shipped in /usr/bin).
+# Locates the installed python package across distro layouts and execs the CLI.
+
+set -e
+
+# Python package discovery: Debian/Ubuntu use dist-packages, RHEL/Fedora/SUSE
+# and pip-style installs use site-packages, Arch uses python's own site dir.
+for base in /usr/lib/python3/dist-packages /usr/lib/python3/site-packages /usr/lib/python3.*/site-packages; do
+    if [ -d "$base/synthetic_usage_awareness" ]; then
+        PYTHONPATH="$base${PYTHONPATH:+:$PYTHONPATH}"
+        break
+    fi
+done
+export PYTHONPATH
+
+# Pick the best available interpreter. The service needs >= 3.7
+# (`from __future__ import annotations`); RHEL 8's default python3 is 3.6,
+# so scan versioned interpreters newest-first before falling back to `python3`.
+PY=""
+for candidate in python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3.7 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        PY="$candidate"
+        break
+    fi
+done
+if [ -z "$PY" ]; then
+    echo "synthetic-usage-awareness: no suitable python3 interpreter found (need >= 3.7)" >&2
+    exit 127
+fi
+
+exec "$PY" -m synthetic_usage_awareness "$@"

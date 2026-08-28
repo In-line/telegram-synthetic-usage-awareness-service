@@ -1,0 +1,13 @@
+[Unit]
+Description=Synthetic usage awareness check (quota alerts via Telegram)
+Documentation=file:///usr/share/doc/synthetic-usage-awareness/README.md
+
+[Service]
+Type=oneshot
+# Secrets live here (packaged as /etc/default/synthetic-usage-awareness,
+# seed copy in ~/.config/synthetic-usage-awareness/env).
+EnvironmentFile=-/etc/default/synthetic-usage-awareness
+EnvironmentFile=-%h/.config/synthetic-usage-awareness/env
+ExecStart=/usr/bin/synthetic-usage-awareness --once
+# A failed check must not wedge the timer.
+TimeoutStartSec=120

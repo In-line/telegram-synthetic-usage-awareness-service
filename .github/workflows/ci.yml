@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Run pre-commit (lint + format + secret scan, single source of truth)
+        run: |
+          python -m pip install --upgrade pip pre-commit
+          pre-commit run --all-files
+
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: python:${{ matrix.python-version }}-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install package and pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+          python -m pip install pytest
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Smoke test CLI
+        run: |
+          synthetic-usage-awareness --version
+          synthetic-usage-awareness --help >/dev/null
+          synthetic-usage-awareness --show-config
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Build Debian 13 package with pkger in Docker
+        run: |
+          ./scripts/install-pkger.sh
+          # pkger does not create its log/output dirs on a fresh clone.
+          mkdir -p dist .pkger-logs
+          # Pre-tag so pkger's `FROM debian-13:latest` never races (pkger 0.11.0 quirk).
+          docker build -q -t debian-13:latest images/debian-13 >/dev/null
+          ./bin/pkger -c .pkger.yml build -i debian-13 -- synthetic-usage-awareness
+
+      - name: Install package in a clean Debian 13 container
+        run: |
+          DEB=$(find dist/debian-13 -name '*.deb' | head -n1)
+          test -n "$DEB"
+          docker run --rm -v "$PWD:/repo":ro debian:13 /bin/sh -exc '
+            apt-get update -qq
+            apt-get install -y /repo/"'"$DEB"'"
+            synthetic-usage-awareness --version
+            synthetic-usage-awareness --show-config
+            test -f /usr/lib/systemd/user/synthetic-usage-awareness.service
+            test -f /usr/lib/systemd/user/synthetic-usage-awareness.timer
+          '
+
+  unit-files:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate systemd unit syntax
+        run: |
+          pacman -Syu --noconfirm systemd
+          # systemd-analyze verify fails when ExecStart points at a missing
+          # binary — stage the launcher where the unit expects it first.
+          install -D -m 0755 packaging/launcher/synthetic-usage-awareness /usr/bin/synthetic-usage-awareness
+          systemd-analyze verify \
+            packaging/systemd-user/synthetic-usage-awareness.service \
+            packaging/systemd-user/synthetic-usage-awareness.timer || \
+            { echo "systemd-analyze found issues" >&2; exit 1; }

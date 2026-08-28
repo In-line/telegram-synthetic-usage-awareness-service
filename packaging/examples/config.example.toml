@@ -1,0 +1,39 @@
+# synthetic-usage-awareness configuration.
+# Installed to ~/.config/synthetic-usage-awareness/config.toml by the
+# post-install script if not present. Keys can be flat or grouped in
+# sections (both shown below). Environment variables (SYN_AWARENESS_*)
+# override these values — see env.example for secrets.
+
+# Master switch
+enabled = true
+
+# --- Synthetic API ---
+[api]
+api_key = ""            # required, or set SYN_AWARENESS_API_KEY
+api_base = "https://api.synthetic.new"
+quotas_path = "/v2/quotas"
+request_timeout_sec = 15.0
+
+# --- Telegram notification ---
+[telegram]
+bot_token = ""          # required, or set SYN_AWARENESS_BOT_TOKEN
+chat_id = ""            # required, or set SYN_AWARENESS_CHAT_ID
+thread_id = ""          # optional forum topic id
+
+# --- Regeneration model (Synthetic: 2% per 4h) ---
+[thresholds]
+regen_percent = 2.0
+regen_interval_hours = 4.0
+threshold_8h_percent = 4.0    # 8h worth of usage
+threshold_16h_percent = 8.0   # 16h worth
+threshold_24h_percent = 12.0  # 24h worth
+low_usage_threshold_percent = 12.0  # below this: alert each 1% drop
+
+# --- Monitoring intervals (minutes) ---
+[intervals]
+normal_interval_min = 10.0
+low_interval_min = 1.0
+
+# --- Logging ---
+[log]
+log_level = "INFO"

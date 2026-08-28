@@ -1,0 +1,133 @@
+# CI recipe — validates the packaged code and assembles the filesystem layout.
+# Works on any image; used by pkger for deb/rpm/pkg targets.
+#
+# Path notes:
+#   - build phase cwd = $PKGER_BLD_DIR (project source copied there)
+#   - install phase cwd = $PKGER_OUT_DIR (package payload root)
+metadata:
+  name: synthetic-usage-awareness
+  description: >-
+    Synthetic subscription usage tracker — polls the Synthetic API and sends
+    Telegram alerts when quota usage crosses thresholds. Runs as a systemd
+    user timer service.
+  arch: x86_64
+  license: GPL-3.0-or-later
+  version: 1.0.0
+  release: "1"
+  maintainer: Alik
+  url: https://github.com/In-line/telegram-synthetic-usage-awareness-service
+  # Relative to the recipe directory → project root.
+  source: ../..
+  group: Utilities
+  images:
+    - debian-13
+    - ubuntu-2404
+    - ubuntu-2604
+    - fedora-43
+    - fedora-44
+    - rhel-8
+    - rhel-9
+    - opensuse-tumbleweed
+    - arch
+  provides:
+    - synthetic-usage-awareness
+  # Runtime dependency: pure stdlib Python, needs only the interpreter.
+  depends:
+    all: [python3]
+  # Maintainer scripts: post-install stages the systemd user units, seeds
+  # config, and reloads units; pre-remove stops/disables the timer. Same
+  # shell script wired into each target format's scriptlet mechanism.
+  deb:
+    postinst_script: |-
+      #!/bin/sh
+      set -e
+      if [ -x /usr/share/synthetic-usage-awareness/scripts/post-install.sh ]; then
+          /usr/share/synthetic-usage-awareness/scripts/post-install.sh
+      fi
+      exit 0
+    prerm_script: |-
+      #!/bin/sh
+      set -e
+      if [ -x /usr/share/synthetic-usage-awareness/scripts/pre-uninstall.sh ]; then
+          /usr/share/synthetic-usage-awareness/scripts/pre-uninstall.sh
+      fi
+      exit 0
+  rpm:
+    post_script: |-
+      if [ -x /usr/share/synthetic-usage-awareness/scripts/post-install.sh ]; then
+          /usr/share/synthetic-usage-awareness/scripts/post-install.sh || true
+      fi
+    preun_script: |-
+      if [ -x /usr/share/synthetic-usage-awareness/scripts/pre-uninstall.sh ]; then
+          /usr/share/synthetic-usage-awareness/scripts/pre-uninstall.sh || true
+      fi
+  # Arch (pkg): pkger 0.11.0 renders `install=` in PKGBUILD but does not upload
+  # the .install file, so hook execution is handled distro-natively via an ALPM
+  # hook shipped in the package (usr/share/libalpm/hooks/).
+  pkg:
+    post_install_script: |-
+      if [ -x /usr/share/synthetic-usage-awareness/scripts/post-install.sh ]; then
+          /usr/share/synthetic-usage-awareness/scripts/post-install.sh || true
+      fi
+    pre_remove_script: |-
+      if [ -x /usr/share/synthetic-usage-awareness/scripts/pre-uninstall.sh ]; then
+          /usr/share/synthetic-usage-awareness/scripts/pre-uninstall.sh || true
+      fi
+
+# Build: byte-compile all modules on the target distro's python3 (syntax check).
+build:
+  steps:
+    - cmd: python3 -m compileall -q src/synthetic_usage_awareness
+
+install:
+  steps:
+    # --- Python package ---
+    - cmd: install -d -m 0755 usr/lib/python3/dist-packages/synthetic_usage_awareness
+    - cmd: >-
+        install -m 0644 $PKGER_BLD_DIR/src/synthetic_usage_awareness/*.py
+        usr/lib/python3/dist-packages/synthetic_usage_awareness/
+    # Vendored tomli backport subpackage (needed on Python < 3.11, e.g. RHEL 8/9)
+    - cmd: install -d -m 0755 usr/lib/python3/dist-packages/synthetic_usage_awareness/_vendored_tomli
+    - cmd: >-
+        install -m 0644 $PKGER_BLD_DIR/src/synthetic_usage_awareness/_vendored_tomli/*.py
+        usr/lib/python3/dist-packages/synthetic_usage_awareness/_vendored_tomli/
+    # --- CLI entry point ---
+    - cmd: install -d -m 0755 usr/bin
+    - cmd: >-
+        install -m 0755 $PKGER_BLD_DIR/packaging/launcher/synthetic-usage-awareness
+        usr/bin/synthetic-usage-awareness
+    # --- systemd user units (staged; post-install copies to /usr/lib/systemd/user) ---
+    - cmd: install -d -m 0755 usr/share/synthetic-usage-awareness/systemd-user
+    - cmd: >-
+        install -m 0644 $PKGER_BLD_DIR/packaging/systemd-user/synthetic-usage-awareness.service
+        usr/share/synthetic-usage-awareness/systemd-user/
+    - cmd: >-
+        install -m 0644 $PKGER_BLD_DIR/packaging/systemd-user/synthetic-usage-awareness.timer
+        usr/share/synthetic-usage-awareness/systemd-user/
+    # --- Example config + env file ---
+    - cmd: install -d -m 0755 usr/share/synthetic-usage-awareness/examples
+    - cmd: >-
+        install -m 0644 $PKGER_BLD_DIR/packaging/examples/config.example.toml
+        usr/share/synthetic-usage-awareness/examples/
+    - cmd: >-
+        install -m 0600 $PKGER_BLD_DIR/packaging/examples/env.example
+        usr/share/synthetic-usage-awareness/examples/
+    # --- Post-install / pre-remove scripts ---
+    - cmd: install -d -m 0755 usr/share/synthetic-usage-awareness/scripts
+    - cmd: >-
+        install -m 0755 $PKGER_BLD_DIR/packaging/scripts/post-install.sh
+        usr/share/synthetic-usage-awareness/scripts/
+    - cmd: >-
+        install -m 0755 $PKGER_BLD_DIR/packaging/scripts/pre-uninstall.sh
+        usr/share/synthetic-usage-awareness/scripts/
+    # --- ALPM hook (Arch): runs post-install.sh on install/upgrade ---
+    - cmd: install -d -m 0755 usr/share/libalpm/hooks
+    - cmd: >-
+        install -m 0644 $PKGER_BLD_DIR/packaging/alpm/synthetic-usage-awareness.hook
+        usr/share/libalpm/hooks/
+    # --- License + docs ---
+    - cmd: install -d -m 0755 usr/share/doc/synthetic-usage-awareness
+    - cmd: >-
+        install -m 0644 $PKGER_BLD_DIR/LICENSE usr/share/doc/synthetic-usage-awareness/
+    - cmd: >-
+        install -m 0644 $PKGER_BLD_DIR/README.md usr/share/doc/synthetic-usage-awareness/

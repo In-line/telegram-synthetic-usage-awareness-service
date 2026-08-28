@@ -1,0 +1,15 @@
+[Unit]
+Description=Run synthetic-usage-awareness check every 10 minutes
+Documentation=file:///usr/share/doc/synthetic-usage-awareness/README.md
+
+[Timer]
+# Adaptive polling equivalent: the daemon modes tune their own interval,
+# but a fixed 10-minute timer keeps the oneshot mode simple and predictable.
+OnBootSec=3min
+OnUnitActiveSec=10min
+# Do not stack checks if one runs long.
+AccuracySec=30s
+Unit=synthetic-usage-awareness.service
+
+[Install]
+WantedBy=timers.target

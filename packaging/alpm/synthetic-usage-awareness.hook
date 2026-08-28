@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = synthetic-usage-awareness
+
+[Action]
+Description = Staging synthetic-usage-awareness systemd user units and seeding config
+When = PostTransaction
+Exec = /usr/share/synthetic-usage-awareness/scripts/post-install.sh
